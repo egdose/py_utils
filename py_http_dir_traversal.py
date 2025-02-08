@@ -7,6 +7,7 @@ import io
 import json
 import http.server
 from py_translate_dir import translate_name
+import threading
 from googletrans import Translator
 import asyncio
 import signal
@@ -149,7 +150,7 @@ class DirectoryHandler(http.server.SimpleHTTPRequestHandler):
 if __name__ == "__main__":
     def signal_handler(signal, frame):
         print("\nShutting down the server...")
-        httpd.shutdown()
+        threading.Thread(target=httpd.shutdown).start()
         sys.exit(0)
 
     signal.signal(signal.SIGINT, signal_handler)
