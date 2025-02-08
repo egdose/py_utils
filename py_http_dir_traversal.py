@@ -4,8 +4,12 @@ import socketserver
 from urllib.parse import unquote
 from datetime import datetime
 import io
-
+import json
 import http.server
+from py_translate_dir import translate_name
+from googletrans import Translator
+import asyncio
+import signal
 
 class DirectoryHandler(http.server.SimpleHTTPRequestHandler):
     def list_directory(self, path):
@@ -55,15 +59,20 @@ class DirectoryHandler(http.server.SimpleHTTPRequestHandler):
         for name in list:
             fullname = os.path.join(path, name)
             displayname = linkname = name
+            translated_name = None
             if os.path.isdir(fullname):
                 displayname = name + "/"
-                linkname = name + "/"
+            linkname = name + "/"
+            if translate_flag:
+                translated_name = self.translate_text(displayname)
             r.append('<tr>')
             r.append('<td><i class="icon icon-_blank"></i></td>')
             r.append('<td class="perms"><code>(%s)</code></td>' % self.get_permissions(fullname))
             r.append('<td class="last-modified">%s</td>' % self.get_last_modified(fullname))
             r.append('<td class="file-size"><code>%s</code></td>' % (self.get_size(fullname) if not os.path.isdir(fullname) else ''))
             r.append('<td class="display-name"><a href="%s">%s</a></td>' % (linkname, displayname))
+            if translated_name:
+                r.append('<td class="translated-name">%s</td>' % translated_name)
             r.append('</tr>')
         r.append('</table>')
         r.append('<br><address>Python HTTP server</address>')
@@ -92,13 +101,48 @@ class DirectoryHandler(http.server.SimpleHTTPRequestHandler):
         st = os.stat(path)
         return st.st_size
 
-if __name__ == "__main__":
-    if len(sys.argv) != 3:
-        print("Usage: python py_http_dir_traversal.py <port> <directory>")
-        sys.exit(1)
+    def translate_text(self, text):
+        cache_dir = os.path.join(os.path.dirname(__file__), '__pycache__')
+        cache_file = os.path.join(cache_dir, 'translation_cache.json')
+        if not os.path.exists(cache_dir):
+            os.makedirs(cache_dir)
+        if os.path.exists(cache_file):
+            with open(cache_file, 'r', encoding='utf-8') as f:
+                cache = json.load(f)
+        else:
+            cache = {}
+        if text in cache:
+            return cache[text]
 
-    port = int(sys.argv[1])
-    directory = sys.argv[2]
+        loop = asyncio.get_event_loop()
+        if not hasattr(self, 'translator'):
+            self.translator = Translator()
+        translated_text = loop.run_until_complete(translate_name(text, self.translator))
+
+        cache[text] = translated_text
+        with open(cache_file, 'w', encoding='utf-8') as f:
+            json.dump(cache, f, ensure_ascii=False, indent=4)
+        return translated_text
+
+if __name__ == "__main__":
+    def signal_handler(signal, frame):
+        print("\nShutting down the server...")
+        httpd.shutdown()
+        sys.exit(0)
+
+    signal.signal(signal.SIGINT, signal_handler)
+    signal.signal(signal.SIGTERM, signal_handler)
+
+    import argparse
+    parser = argparse.ArgumentParser(description="HTTP Directory Traversal Server")
+    parser.add_argument("--port", "-p", type=int, help="Port number to serve on", default=8000)
+    parser.add_argument("--directory", "-d", type=str, help="Directory to serve", default=".")
+    parser.add_argument("--translate", "-t", action="store_true", help="Translate file and directory names")
+    args = parser.parse_args()
+
+    port = args.port
+    directory = args.directory
+    translate_flag = args.translate
 
     os.chdir(directory)
 
