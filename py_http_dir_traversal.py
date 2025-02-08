@@ -1,7 +1,7 @@
 import os
 import sys
 import socketserver
-from urllib.parse import unquote
+from urllib.parse import unquote, urlparse, parse_qs
 from datetime import datetime
 import io
 import json
@@ -38,6 +38,13 @@ class DirectoryHandler(http.server.SimpleHTTPRequestHandler):
             with open(icons_css_path, 'r') as f:
                 r.append(f.read())
         r.append('</style>')
+        r.append('<script>')
+        r.append('async function fetchTranslation(name, elementId) {')
+        r.append('  const response = await fetch(`/translate?name=${encodeURIComponent(name)}`);')
+        r.append('  const data = await response.json();')
+        r.append('  document.getElementById(elementId).innerText = data.translated_name;')
+        r.append('}')
+        r.append('</script>')
         r.append('</head>')
         r.append('<body>')
         r.append('<h1>Index of %s</h1>' % displaypath)
@@ -56,23 +63,22 @@ class DirectoryHandler(http.server.SimpleHTTPRequestHandler):
             r.append('<td class="display-name"><a href="%s">Parent Directory</a></td>' % parent_path)
             r.append('</tr>')
 
-        for name in list:
+        for idx, name in enumerate(list):
             fullname = os.path.join(path, name)
             displayname = linkname = name
-            translated_name = None
             if os.path.isdir(fullname):
                 displayname = name + "/"
             linkname = name + "/"
-            if translate_flag:
-                translated_name = self.translate_text(displayname)
+            element_id = f'translation-{idx}'
             r.append('<tr>')
             r.append('<td><i class="icon icon-_blank"></i></td>')
             r.append('<td class="perms"><code>(%s)</code></td>' % self.get_permissions(fullname))
             r.append('<td class="last-modified">%s</td>' % self.get_last_modified(fullname))
             r.append('<td class="file-size"><code>%s</code></td>' % (self.get_size(fullname) if not os.path.isdir(fullname) else ''))
             r.append('<td class="display-name"><a href="%s">%s</a></td>' % (linkname, displayname))
-            if translated_name:
-                r.append('<td class="translated-name">%s</td>' % translated_name)
+            if translate_flag:
+                r.append('<td class="translated-name" id="%s">Translating...</td>' % element_id)
+                r.append('<script>fetchTranslation("%s", "%s");</script>' % (displayname, element_id))
             r.append('</tr>')
         r.append('</table>')
         r.append('<br><address>Python HTTP server</address>')
@@ -123,6 +129,22 @@ class DirectoryHandler(http.server.SimpleHTTPRequestHandler):
         with open(cache_file, 'w', encoding='utf-8') as f:
             json.dump(cache, f, ensure_ascii=False, indent=4)
         return translated_text
+
+    def do_GET(self):
+        parsed_path = urlparse(self.path)
+        if parsed_path.path == '/translate':
+            query = parse_qs(parsed_path.query)
+            name = query.get('name', [None])[0]
+            if name:
+                translated_name = self.translate_text(name)
+                self.send_response(http.HTTPStatus.OK)
+                self.send_header("Content-type", "application/json")
+                self.end_headers()
+                self.wfile.write(json.dumps({'translated_name': translated_name}).encode('utf-8'))
+            else:
+                self.send_error(http.HTTPStatus.BAD_REQUEST, "Missing 'name' parameter")
+        else:
+            super().do_GET()
 
 if __name__ == "__main__":
     def signal_handler(signal, frame):
