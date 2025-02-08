@@ -38,6 +38,20 @@ class DirectoryHandler(http.server.SimpleHTTPRequestHandler):
         r.append('<body>')
         r.append('<h1>Index of %s</h1>' % displaypath)
         r.append('<table>')
+
+        # Add link to parent directory if not in root
+        if self.path != '/':
+            parent_path = os.path.dirname(self.path.rstrip('/'))
+            if parent_path == '':
+                parent_path = '/'
+            r.append('<tr>')
+            r.append('<td><i class="icon icon-_blank"></i></td>')
+            r.append('<td class="perms"><code>(d---------)</code></td>')
+            r.append('<td class="last-modified"></td>')
+            r.append('<td class="file-size"></td>')
+            r.append('<td class="display-name"><a href="%s">Parent Directory</a></td>' % parent_path)
+            r.append('</tr>')
+
         for name in list:
             fullname = os.path.join(path, name)
             displayname = linkname = name
