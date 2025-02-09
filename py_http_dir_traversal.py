@@ -124,7 +124,7 @@ class DirectoryHandler(http.server.SimpleHTTPRequestHandler):
         loop = asyncio.get_event_loop()
         if not hasattr(self, 'translator'):
             self.translator = Translator()
-        translated_text = loop.run_until_complete(translate_name(text, self.translator))
+        translated_text = loop.run_until_complete(translate_name(text, self.translator, fast_translation=fast_translation))
 
         cache[text] = translated_text
         with open(cache_file, 'w', encoding='utf-8') as f:
@@ -165,7 +165,7 @@ async def pretranslate_directory(path, translator):
         print(f"Processing directory: {root}")
         for name in files + dirs:
             if name not in cache:
-                translated_name = await translate_name(name, translator)
+                translated_name = await translate_name(name, translator, fast_translation=fast_translation)
                 cache[name] = translated_name
             processed_items += 1
             print(f"Translated {processed_items}/{total_items} items ({(processed_items / total_items) * 100:.2f}%)")
@@ -189,11 +189,13 @@ if __name__ == "__main__":
     parser.add_argument("--directory", "-d", type=str, help="Directory to serve", default=".")
     parser.add_argument("--translate", "-t", action="store_true", help="Translate file and directory names")
     parser.add_argument("--pretranslate", "-pt", action="store_true", help="Pre-translate all file and directory names")
+    parser.add_argument("--quicktranslate", "-qt", action="store_true", help="Enable quick translation mode")
     args = parser.parse_args()
 
     port = args.port
     directory = args.directory
     translate_flag = args.translate
+    fast_translation = args.quicktranslate
 
     if args.pretranslate:
         translator = Translator()

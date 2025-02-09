@@ -3,10 +3,15 @@ import sys
 from googletrans import Translator
 
 import asyncio
+import re
 
-async def translate_name(name, translator):
-    translation = await translator.translate(name, dest='en')
-    return translation.text
+
+async def translate_name(name, translator, fast_translation=False):
+    # Check if the name contains non-English characters
+    if fast_translation and re.search(r'[^a-zA-Z0-9_\-\. ]', name):
+        translation = await translator.translate(name, dest='en')
+        return translation.text
+    return name
 
 async def translate_directory(path, translator):
     total_files = sum([len(files) for r, d, files in os.walk(path)])
