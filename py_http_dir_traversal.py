@@ -147,10 +147,37 @@ class DirectoryHandler(http.server.SimpleHTTPRequestHandler):
         else:
             super().do_GET()
 
+async def pretranslate_directory(path, translator):
+    cache_dir = os.path.join(os.path.dirname(__file__), '__pycache__')
+    cache_file = os.path.join(cache_dir, 'translation_cache.json')
+    if not os.path.exists(cache_dir):
+        os.makedirs(cache_dir)
+    if os.path.exists(cache_file):
+        with open(cache_file, 'r', encoding='utf-8') as f:
+            cache = json.load(f)
+    else:
+        cache = {}
+
+    total_items = sum(len(files) + len(dirs) for _, dirs, files in os.walk(path))
+    processed_items = 0
+
+    for root, dirs, files in os.walk(path):
+        print(f"Processing directory: {root}")
+        for name in files + dirs:
+            if name not in cache:
+                translated_name = await translate_name(name, translator)
+                cache[name] = translated_name
+            processed_items += 1
+            print(f"Translated {processed_items}/{total_items} items ({(processed_items / total_items) * 100:.2f}%)")
+
+    with open(cache_file, 'w', encoding='utf-8') as f:
+        json.dump(cache, f, ensure_ascii=False, indent=4)
+
 if __name__ == "__main__":
     def signal_handler(signal, frame):
         print("\nShutting down the server...")
-        threading.Thread(target=httpd.shutdown).start()
+        if 'httpd' in globals():
+            threading.Thread(target=httpd.shutdown).start()
         sys.exit(0)
 
     signal.signal(signal.SIGINT, signal_handler)
@@ -161,11 +188,18 @@ if __name__ == "__main__":
     parser.add_argument("--port", "-p", type=int, help="Port number to serve on", default=8000)
     parser.add_argument("--directory", "-d", type=str, help="Directory to serve", default=".")
     parser.add_argument("--translate", "-t", action="store_true", help="Translate file and directory names")
+    parser.add_argument("--pretranslate", "-pt", action="store_true", help="Pre-translate all file and directory names")
     args = parser.parse_args()
 
     port = args.port
     directory = args.directory
     translate_flag = args.translate
+
+    if args.pretranslate:
+        translator = Translator()
+        asyncio.run(pretranslate_directory(directory, translator))
+        print("Pre-translation completed.")
+        sys.exit(0)
 
     os.chdir(directory)
 
