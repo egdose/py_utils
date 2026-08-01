@@ -161,14 +161,18 @@ async def pretranslate_directory(path, translator):
     total_items = sum(len(files) + len(dirs) for _, dirs, files in os.walk(path))
     processed_items = 0
 
-    for root, dirs, files in os.walk(path):
-        print(f"Processing directory: {root}")
-        for name in files + dirs:
-            if name not in cache:
-                translated_name = await translate_name(name, translator, fast_translation=fast_translation)
-                cache[name] = translated_name
-            processed_items += 1
-            print(f"Translated {processed_items}/{total_items} items ({(processed_items / total_items) * 100:.2f}%)")
+    try:
+        for root, dirs, files in os.walk(path):
+            print(f"Processing directory: {root}")
+            for name in files + dirs:
+                if name not in cache:
+                    translated_name = await translate_name(name, translator, fast_translation=fast_translation)
+                    cache[name] = translated_name
+                processed_items += 1
+                print(f"Translated {processed_items}/{total_items} items ({(processed_items / total_items) * 100:.2f}%)")
+    except Exception as e:
+        print(f"An error occurred: {e}")
+
 
     with open(cache_file, 'w', encoding='utf-8') as f:
         json.dump(cache, f, ensure_ascii=False, indent=4)
