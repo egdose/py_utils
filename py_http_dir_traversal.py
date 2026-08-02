@@ -91,7 +91,8 @@ class DirectoryHandler(http.server.SimpleHTTPRequestHandler):
         except os.error:
             self.send_error(http.HTTPStatus.NOT_FOUND, "No permission to list directory")
             return None
-        list.sort(key=lambda a: a.lower())
+        # Directories first, then files; each group sorted alphabetically.
+        list.sort(key=lambda a: (not os.path.isdir(os.path.join(path, a)), a.lower()))
         r = []
         displaypath = unquote(self.path)
         r.append('<!doctype html>')
