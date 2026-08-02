@@ -60,6 +60,19 @@ Run the script with optional arguments to specify the port, directory, and trans
 python py_http_dir_traversal.py --port 8080 --directory /path/to/serve --translate
 ```
 
+#### Renaming from the browser
+
+When `--translate` is enabled, the listing shows the translated name next to each entry
+along with a **Rename** button. Nothing on disk changes until a button is clicked.
+
+- **Per entry**: click **Rename** to apply the translated name to that file or folder. The
+  button then turns into **Undo**, which restores the original name.
+- **In bulk**: the panel at the bottom of the listing lets you tick one or more file types,
+  optionally include subdirectories (recursive) and folder names, and preview every
+  translation before confirming. After applying, **Undo all** reverses the whole batch.
+
+Directories are listed before files, each group sorted alphabetically.
+
 ### setup.bat
 
 A batch script to set up a Python virtual environment and install the required dependencies.
