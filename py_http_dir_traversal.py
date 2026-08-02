@@ -1,8 +1,9 @@
 import os
 import sys
 import socketserver
-from urllib.parse import unquote, urlparse, parse_qs
+from urllib.parse import unquote, quote, urlparse, parse_qs
 from datetime import datetime
+from html import escape
 import io
 import json
 import http.server
@@ -11,6 +12,77 @@ import threading
 from googletrans import Translator
 import asyncio
 import signal
+
+# Client-side helpers for the per-row "Rename / Undo" button. A rename is only
+# performed when the user clicks the button; nothing is renamed on disk before that.
+RENAME_SCRIPT = """
+const rowState = {};
+
+function registerRow(idx, name, isDir) {
+  rowState[idx] = {current: name, isDir: isDir, translated: null, original: null};
+}
+
+function refreshRow(idx) {
+  const st = rowState[idx];
+  const link = document.getElementById('link-' + idx);
+  const btn = document.getElementById('rename-' + idx);
+  const suffix = st.isDir ? '/' : '';
+  link.textContent = st.current + suffix;
+  link.setAttribute('href', encodeURIComponent(st.current) + suffix);
+  if (st.original !== null) {
+    btn.textContent = 'Undo';
+    btn.title = 'Restore "' + st.original + '"';
+    btn.disabled = false;
+  } else if (st.translated && st.translated !== st.current) {
+    btn.textContent = 'Rename';
+    btn.title = 'Rename to "' + st.translated + '"';
+    btn.disabled = false;
+  } else {
+    btn.textContent = 'Rename';
+    btn.title = st.translated ? 'Name is already translated' : 'Waiting for translation';
+    btn.disabled = true;
+  }
+}
+
+async function fetchTranslation(idx) {
+  const st = rowState[idx];
+  const cell = document.getElementById('translation-' + idx);
+  try {
+    const response = await fetch('/translate?name=' + encodeURIComponent(st.current));
+    const data = await response.json();
+    st.translated = data.translated_name;
+    cell.textContent = st.translated + (st.isDir ? '/' : '');
+  } catch (err) {
+    cell.textContent = 'Translation failed';
+  }
+  refreshRow(idx);
+}
+
+async function toggleRename(idx) {
+  const st = rowState[idx];
+  const btn = document.getElementById('rename-' + idx);
+  const target = st.original !== null ? st.original : st.translated;
+  if (!target) { return; }
+  const previous = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = '...';
+  try {
+    const response = await fetch('/rename', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({dir: DIR_PATH, old: st.current, new: target})
+    });
+    const data = await response.json();
+    if (!response.ok) { throw new Error(data.error || 'Rename failed'); }
+    st.original = st.original !== null ? null : st.current;
+    st.current = data.name;
+  } catch (err) {
+    btn.textContent = previous;
+    alert('Rename failed: ' + err.message);
+  }
+  refreshRow(idx);
+}
+"""
 
 class DirectoryHandler(http.server.SimpleHTTPRequestHandler):
     def list_directory(self, path):
@@ -34,17 +106,18 @@ class DirectoryHandler(http.server.SimpleHTTPRequestHandler):
         r.append('td.perms {}')
         r.append('td.file-size { text-align: right; padding-left: 1em; }')
         r.append('td.display-name { padding-left: 1em; }')
+        r.append('td.rename-action { padding-left: 1em; }')
+        r.append('td.rename-action button { cursor: pointer; }')
+        r.append('td.rename-action button[disabled] { cursor: default; opacity: 0.5; }')
+        r.append('td.translated-name { padding-left: 1em; }')
         icons_css_path = os.path.join(os.path.dirname(__file__), 'icons.css')
         if os.path.exists(icons_css_path):
             with open(icons_css_path, 'r') as f:
                 r.append(f.read())
         r.append('</style>')
         r.append('<script>')
-        r.append('async function fetchTranslation(name, elementId) {')
-        r.append('  const response = await fetch(`/translate?name=${encodeURIComponent(name)}`);')
-        r.append('  const data = await response.json();')
-        r.append('  document.getElementById(elementId).innerText = data.translated_name;')
-        r.append('}')
+        r.append('const DIR_PATH = %s;' % json.dumps(urlparse(self.path).path))
+        r.append(RENAME_SCRIPT)
         r.append('</script>')
         r.append('</head>')
         r.append('<body>')
@@ -66,20 +139,22 @@ class DirectoryHandler(http.server.SimpleHTTPRequestHandler):
 
         for idx, name in enumerate(list):
             fullname = os.path.join(path, name)
-            displayname = linkname = name
-            if os.path.isdir(fullname):
-                displayname = name + "/"
-            linkname = name + "/"
-            element_id = f'translation-{idx}'
+            is_dir = os.path.isdir(fullname)
+            displayname = name + "/" if is_dir else name
+            linkname = quote(name, errors='surrogatepass') + ("/" if is_dir else "")
             r.append('<tr>')
             r.append('<td><i class="icon icon-_blank"></i></td>')
             r.append('<td class="perms"><code>(%s)</code></td>' % self.get_permissions(fullname))
             r.append('<td class="last-modified">%s</td>' % self.get_last_modified(fullname))
-            r.append('<td class="file-size"><code>%s</code></td>' % (self.get_size(fullname) if not os.path.isdir(fullname) else ''))
-            r.append('<td class="display-name"><a href="%s">%s</a></td>' % (linkname, displayname))
+            r.append('<td class="file-size"><code>%s</code></td>' % (self.get_size(fullname) if not is_dir else ''))
+            r.append('<td class="display-name"><a id="link-%d" href="%s">%s</a></td>' % (idx, linkname, escape(displayname)))
             if translate_flag:
-                r.append('<td class="translated-name" id="%s">Translating...</td>' % element_id)
-                r.append('<script>fetchTranslation("%s", "%s");</script>' % (displayname, element_id))
+                r.append('<td class="rename-action">'
+                         '<button id="rename-%d" type="button" disabled onclick="toggleRename(%d)">Rename</button>'
+                         '</td>' % (idx, idx))
+                r.append('<td class="translated-name" id="translation-%d">Translating...</td>' % idx)
+                r.append('<script>registerRow(%d, %s, %s); fetchTranslation(%d);</script>'
+                         % (idx, json.dumps(name), json.dumps(is_dir), idx))
             r.append('</tr>')
         r.append('</table>')
         r.append('<br><address>Python HTTP server</address>')
@@ -131,6 +206,14 @@ class DirectoryHandler(http.server.SimpleHTTPRequestHandler):
             json.dump(cache, f, ensure_ascii=False, indent=4)
         return translated_text
 
+    def send_json(self, payload, status=http.HTTPStatus.OK):
+        body = json.dumps(payload).encode('utf-8')
+        self.send_response(status)
+        self.send_header("Content-type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
     def do_GET(self):
         parsed_path = urlparse(self.path)
         if parsed_path.path == '/translate':
@@ -138,14 +221,54 @@ class DirectoryHandler(http.server.SimpleHTTPRequestHandler):
             name = query.get('name', [None])[0]
             if name:
                 translated_name = self.translate_text(name)
-                self.send_response(http.HTTPStatus.OK)
-                self.send_header("Content-type", "application/json")
-                self.end_headers()
-                self.wfile.write(json.dumps({'translated_name': translated_name}).encode('utf-8'))
+                self.send_json({'translated_name': translated_name})
             else:
                 self.send_error(http.HTTPStatus.BAD_REQUEST, "Missing 'name' parameter")
         else:
             super().do_GET()
+
+    def do_POST(self):
+        if urlparse(self.path).path != '/rename':
+            self.send_error(http.HTTPStatus.NOT_FOUND, "Unknown endpoint")
+            return
+        try:
+            length = int(self.headers.get('Content-Length') or 0)
+            payload = json.loads(self.rfile.read(length).decode('utf-8'))
+        except (ValueError, UnicodeDecodeError):
+            self.send_json({'error': 'Invalid request body'}, http.HTTPStatus.BAD_REQUEST)
+            return
+
+        old_name = (payload.get('old') or '').strip()
+        new_name = (payload.get('new') or '').strip().rstrip('/')
+        for candidate in (old_name, new_name):
+            if not candidate or candidate in ('.', '..') or '/' in candidate or '\\' in candidate:
+                self.send_json({'error': 'Invalid file name'}, http.HTTPStatus.BAD_REQUEST)
+                return
+
+        # Keep the operation inside the directory that is being served.
+        root = os.path.realpath(os.getcwd())
+        dir_path = os.path.realpath(self.translate_path(payload.get('dir') or '/'))
+        if dir_path != root and not dir_path.startswith(root + os.sep):
+            self.send_json({'error': 'Directory outside served root'}, http.HTTPStatus.FORBIDDEN)
+            return
+
+        old_path = os.path.join(dir_path, old_name)
+        new_path = os.path.join(dir_path, new_name)
+        if not os.path.exists(old_path):
+            self.send_json({'error': '"%s" no longer exists' % old_name}, http.HTTPStatus.NOT_FOUND)
+            return
+        # A case-only rename on Windows targets the same entry, so allow it.
+        same_entry = os.path.normcase(old_path) == os.path.normcase(new_path)
+        if os.path.exists(new_path) and not same_entry:
+            self.send_json({'error': '"%s" already exists' % new_name}, http.HTTPStatus.CONFLICT)
+            return
+
+        try:
+            os.rename(old_path, new_path)
+        except OSError as e:
+            self.send_json({'error': str(e)}, http.HTTPStatus.INTERNAL_SERVER_ERROR)
+            return
+        self.send_json({'name': new_name})
 
 async def pretranslate_directory(path, translator):
     cache_dir = os.path.join(os.path.dirname(__file__), '__pycache__')
